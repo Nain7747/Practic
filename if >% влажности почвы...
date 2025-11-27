@@ -1,0 +1,244 @@
+import requests
+import time
+from datetime import datetime, timedelta
+
+def smart_greenhouse_water_monitor():
+    """Умный мониторинг теплицы с улучшенным анализом наличия воды"""
+    
+    headers = {"Authorization": "EPP3GHY67735"}
+    
+    sensors = {
+        18: {"name": "Температура воздуха", "unit": "°C"},
+        19: {"name": "Влажность почвы", "unit": "%"},
+        38: {"name": "Температура почвы", "unit": "°C"}
+    }
+    
+    print("=== МОНИТОРИНГ ТЕПЛИЦЫ С АНАЛИЗОМ НАЛИЧИЯ ВОДЫ ===")
+    print("Критерии отсутствия воды в баке:")
+    print("1. Влажность >40% + колебания <5% за 24 часа")
+    print("2. Разница температур воздух-почва <2°C")
+    print("3. Влажность <30% + колебания <10%")
+    print("=" * 70)
+    
+    while True:
+        try:
+            current_time = datetime.now()
+            print(f"\n{current_time.strftime('%d.%m.%Y %H:%M:%S')}")
+            print("-" * 50)
+            
+            sensor_values = {}
+            humidity_data = []
+            alerts = []
+            water_in_tank = True  # Предполагаем, что вода есть
+            
+            # Получаем данные за последние 24 часа
+            end_time = datetime.utcnow()
+            start_time = end_time - timedelta(hours=24)
+            
+            for sensor_id, sensor_info in sensors.items():
+                params = {
+                    "start": start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "end": end_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "page": 1,
+                    "range": 100
+                }
+                
+                url = f"https://api.iot.robolatoriya.com/device/10/getSensorData/{sensor_id}"
+                response = requests.get(url, headers=headers, params=params)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    if data and 'dataset' in data and 'items' in data['dataset'] and data['dataset']['items']:
+                        items = data['dataset']['items']
+                        
+                        # Для влажности почвы собираем данные для анализа
+                        if sensor_id == 19:
+                            for item in items:
+                                try:
+                                    value = float(item.get('value', 0))
+                                    humidity_data.append(value)
+                                except (ValueError, TypeError):
+                                    continue
+                        
+                        # Берем последние значения для текущих показаний
+                        recent_items = items[:10]
+                        values = []
+                        
+                        for item in recent_items:
+                            try:
+                                value = float(item.get('value', 0))
+                                values.append(value)
+                            except (ValueError, TypeError):
+                                continue
+                        
+                        if values:
+                            latest_value = values[0]
+                            sensor_values[sensor_id] = latest_value
+                            print(f"{sensor_info['name']}: {latest_value:.1f}{sensor_info['unit']}")
+                        else:
+                            print(f"{sensor_info['name']}: нет корректных значений")
+                    else:
+                        print(f"{sensor_info['name']}: нет данных за последние 24 часа")
+                else:
+                    print(f"{sensor_info['name']}: ошибка запроса {response.status_code}")
+            
+            # Анализ наличия воды по новому критерию
+            if humidity_data:
+                current_humidity = humidity_data[0] if humidity_data else 0
+                humidity_range = max(humidity_data) - min(humidity_data) if len(humidity_data) > 1 else 0
+                avg_humidity = sum(humidity_data) / len(humidity_data)
+                
+                print(f"\nАНАЛИЗ ВЛАЖНОСТИ ПОЧВЫ ЗА 24 ЧАСА:")
+                print(f"Текущая влажность: {current_humidity:.1f}%")
+                print(f"Средняя влажность: {avg_humidity:.1f}%")
+                print(f"Колебания (макс-мин): {humidity_range:.1f}%")
+                print(f"Кол-во измерений: {len(humidity_data)}")
+                
+                # НОВЫЙ КРИТЕРИЙ: Влажность >40% + колебания <5% = нет воды в баке
+                if current_humidity > 40.0 and humidity_range < 5.0:
+                    alerts.append(f"НЕТ ВОДЫ В БАКЕ: Влажность {current_humidity:.1f}% с колебаниями всего {humidity_range:.1f}%")
+                    alerts.append("Стабильно высокая влажность без изменений - полив не работает")
+                    water_in_tank = False
+                
+                # Старые критерии
+                elif humidity_range < 10.0 and current_humidity < 50.0:
+                    alerts.append(f"ВЫСОХШАЯ ПОЧВА: Колебания {humidity_range:.1f}% при влажности {current_humidity:.1f}%")
+                    water_in_tank = False
+                
+                if current_humidity < 30.0:
+                    alerts.append(f"КРИТИЧЕСКИ НИЗКАЯ ВЛАЖНОСТЬ: {current_humidity:.1f}%")
+                    water_in_tank = False
+            
+            # Анализ по температуре
+            if 18 in sensor_values and 38 in sensor_values:
+                air_temp = sensor_values[18]
+                soil_temp = sensor_values[38]
+                temp_difference = air_temp - soil_temp
+                
+                print(f"\nТЕМПЕРАТУРНЫЙ АНАЛИЗ:")
+                print(f"Воздух: {air_temp:.1f}°C, Почва: {soil_temp:.1f}°C")
+                print(f"Разница: {temp_difference:.1f}°C")
+                
+                if temp_difference >= 2.0 and temp_difference <= 5.0:
+                    print("Температурный признак: ВОДА В БАКЕ")
+                elif temp_difference < 2.0:
+                    alerts.append(f"Температурный признак: ВОДЫ НЕТ - разница {temp_difference:.1f}°C")
+                    water_in_tank = False
+                elif temp_difference > 5.0:
+                    alerts.append(f"ПЕРЕОХЛАЖДЕНИЕ: Разница {temp_difference:.1f}°C")
+            
+            # Комплексный вывод о наличии воды
+            print(f"\nВЫВОД О НАЛИЧИИ ВОДЫ В БАКЕ:")
+            if water_in_tank:
+                print("ВОДА В БАКЕ: Присутствует")
+                if alerts:
+                    print("Но есть второстепенные проблемы:")
+            else:
+                print("ВОДЫ В БАКЕ: ОТСУТСТВУЕТ")
+            
+            # Вывод всех предупреждений
+            if alerts:
+                print("\nПРЕДУПРЕЖДЕНИЯ:")
+                for i, alert in enumerate(alerts, 1):
+                    print(f"  {i}. {alert}")
+            elif water_in_tank:
+                print("\nВСЕ СИСТЕМЫ В НОРМЕ")
+                print("Вода в баке присутствует, полив работает нормально")
+            
+            print(f"\nСледующая проверка через 10 минут...")
+            time.sleep(600)
+            
+        except KeyboardInterrupt:
+            print("\nМониторинг остановлен")
+            break
+        except Exception as e:
+            print(f"Ошибка: {e}")
+            time.sleep(300)
+
+def detailed_humidity_analysis():
+    """Детальный анализ влажности для диагностики"""
+    
+    headers = {"Authorization": "EPP3GHY67735"}
+    
+    print("=== ДЕТАЛЬНЫЙ АНАЛИЗ ВЛАЖНОСТИ ===")
+    
+    try:
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(hours=24)
+        
+        params = {
+            "start": start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "end": end_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "page": 1,
+            "range": 200
+        }
+        
+        response = requests.get(
+            "https://api.iot.robolatoriya.com/device/10/getSensorData/19", 
+            headers=headers, params=params
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            if data and 'dataset' in data and 'items' in data['dataset'] and data['dataset']['items']:
+                items = data['dataset']['items']
+                humidity_values = []
+                timestamps = []
+                
+                for item in items:
+                    try:
+                        value = float(item.get('value', 0))
+                        humidity_values.append(value)
+                        timestamps.append(item.get('datetime', 'N/A'))
+                    except (ValueError, TypeError):
+                        continue
+                
+                if humidity_values:
+                    min_humidity = min(humidity_values)
+                    max_humidity = max(humidity_values)
+                    range_humidity = max_humidity - min_humidity
+                    avg_humidity = sum(humidity_values) / len(humidity_values)
+                    current_humidity = humidity_values[0]
+                    
+                    print(f"Детальный анализ за 24 часа:")
+                    print(f"Текущая влажность: {current_humidity:.1f}%")
+                    print(f"Минимальная: {min_humidity:.1f}%")
+                    print(f"Максимальная: {max_humidity:.1f}%")
+                    print(f"Колебания: {range_humidity:.1f}%")
+                    print(f"Средняя: {avg_humidity:.1f}%")
+                    print(f"Измерений: {len(humidity_values)}")
+                    
+                    # Анализ по новому критерию
+                    if current_humidity > 40.0 and range_humidity < 5.0:
+                        print("\nДИАГНОСТИКА: ВОДЫ В БАКЕ НЕТ")
+                        print("Причина: Высокая влажность без изменений - полив не работает")
+                    elif range_humidity > 15.0:
+                        print("\nДИАГНОСТИКА: ВОДА В БАКЕ ЕСТЬ")
+                        print("Причина: Активные колебания влажности - полив работает")
+                    else:
+                        print("\nДИАГНОСТИКА: Неопределенный статус")
+                        print("Рекомендация: Проверить бак вручную")
+                    
+        else:
+            print("Ошибка получения данных")
+            
+    except Exception as e:
+        print(f"Ошибка: {e}")
+
+# Запуск
+if __name__ == "__main__":
+    print("Выберите режим:")
+    print("1 - Полный мониторинг (каждые 10 минут)")
+    print("2 - Детальный анализ влажности")
+    
+    choice = input("Введите номер: ").strip()
+    
+    if choice == "1":
+        smart_greenhouse_water_monitor()
+    elif choice == "2":
+        detailed_humidity_analysis()
+    else:
+        print("Запуск полного мониторинга...")
+        smart_greenhouse_water_monitor()
