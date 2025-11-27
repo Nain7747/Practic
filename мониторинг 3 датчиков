@@ -1,1 +1,85 @@
+import requests
+import time
+from datetime import datetime
 
+def smart_greenhouse_monitor():
+    """Умный мониторинг с анализом данных"""
+    
+    headers = {"Authorization": "EPP3GHY67735"}
+    
+    sensors = {
+        18: {"name": "Температура воздуха", "unit": "°C", "min": 18, "max": 35},
+        19: {"name": "Влажность почвы", "unit": "%", "min": 30, "max": 80},
+        38: {"name": "Температура почвы", "unit": "°C", "min": 15, "max": 30}
+    }
+    
+    print("=== УМНЫЙ МОНИТОРИНГ ТЕПЛИЦЫ ===")
+    print("Используются тестовые данные за 2025 год")
+    print("=" * 50)
+    
+    while True:
+        try:
+            print(f"\n{datetime.now().strftime('%d.%m.%Y %H:%M:%S')}")
+            print("-" * 40)
+            
+            alerts = []
+            
+            for sensor_id, sensor_info in sensors.items():
+                params = {
+                    "start": "2025-11-01T00:00:00Z",
+                    "end": "2025-11-02T00:00:00Z",
+                    "page": 1,
+                    "range": 10
+                }
+                
+                url = f"https://api.iot.robolatoriya.com/device/10/getSensorData/{sensor_id}"
+                response = requests.get(url, headers=headers, params=params)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    if data and 'dataset' in data and 'items' in data['dataset'] and data['dataset']['items']:
+                        items = data['dataset']['items']
+                        latest = items[0]  # Самый свежий данные
+                        
+                        try:
+                            value = float(latest.get('value', 0))
+                            time_str = latest.get('datetime', 'N/A')
+                            
+                            print(f"{sensor_info['name']}: {value}{sensor_info['unit']}")
+                            print(f"  Время: {time_str}")
+                            
+                            # Проверка границ
+                            if value < sensor_info['min']:
+                                alerts.append(f"НИЗКАЯ {sensor_info['name']}: {value}{sensor_info['unit']}")
+                            elif value > sensor_info['max']:
+                                alerts.append(f"ВЫСОКАЯ {sensor_info['name']}: {value}{sensor_info['unit']}")
+                                
+                        except (ValueError, TypeError):
+                            print(f"{sensor_info['name']}: некорректное значение")
+                    else:
+                        print(f"{sensor_info['name']}: нет данных")
+                else:
+                    print(f"{sensor_info['name']}: ошибка запроса")
+            
+            # Вывод предупреждений
+            if alerts:
+                print("\nПРЕДУПРЕЖДЕНИЯ:")
+                for alert in alerts:
+                    print(f"  {alert}")
+            else:
+                print("\nВсе показатели в норме")
+            
+            print(f"\nСледующая проверка через 60 секунд...")
+            time.sleep(60)
+            
+        except KeyboardInterrupt:
+            print("\nМониторинг остановлен")
+            break
+        except Exception as e:
+            print(f"Ошибка: {e}")
+            time.sleep(60)
+
+# Запуск
+if __name__ == "__main__":
+    smart_greenhouse_monitor()
